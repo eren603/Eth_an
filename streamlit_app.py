@@ -64,6 +64,26 @@ def create_interactive_chart(df):
     
     return fig
 
+def calculate_technical_indicators(df):
+    """Calculate technical indicators with proper error handling"""
+    try:
+        # Calculate SMA
+        df['SMA_20'] = df['prices'].rolling(20).mean()
+        
+        # Calculate RSI with proper parenthesis
+        delta = df['prices'].diff()
+        gain = delta.clip(lower=0)
+        loss = -delta.clip(upper=0)
+        avg_gain = gain.rolling(14).mean()
+        avg_loss = loss.rolling(14).mean()
+        rs = avg_gain / (avg_loss + 1e-10)  # Prevent division by zero
+        df['RSI_14'] = 100 - (100 / (1 + rs))
+        
+        return df
+    except Exception as e:
+        st.error(f"Indicator calculation error: {str(e)}")
+        return df
+
 def main_dashboard():
     """Main dashboard application logic"""
     st.title("🚀 Professional Crypto Analytics Dashboard")
@@ -81,28 +101,24 @@ def main_dashboard():
                     df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
                     df.set_index('timestamp', inplace=True)
                     
-                    # Technical calculations
-                    df['SMA_20'] = df['prices'].rolling(20).mean()
-                    df['RSI_14'] = 100 - (100 / (1 + (
-                        df['prices'].diff().clip(lower=0).rolling(14).mean() / 
-                        df['prices'].diff().clip(upper=0).abs().rolling(14).mean()
-                    ))
+                    # Calculate indicators
+                    df = calculate_technical_indicators(df)
                     
-                    # Real-time metrics
+                    # Get latest values
                     current_price = df['prices'].iloc[-1]
                     rsi_value = df['RSI_14'].iloc[-1]
                     
-                    # Metric columns
+                    # Display metrics
                     col1, col2, col3 = st.columns(3)
                     with col1:
                         st.metric("Current Price", f"${current_price:,.2f}")
                     with col2:
-                        st.metric("RSI (14)", f"{rsi_value:.1f}", 
-                                "Overbought" if rsi_value > 70 else "Oversold" if rsi_value < 30 else "Neutral")
+                        status = "Overbought" if rsi_value > 70 else "Oversold" if rsi_value < 30 else "Neutral"
+                        st.metric("RSI (14)", f"{rsi_value:.1f}", status)
                     with col3:
                         st.metric("Last Update", datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
                     
-                    # Interactive visualization
+                    # Display interactive chart
                     st.plotly_chart(create_interactive_chart(df), use_container_width=True)
                     
                     error_counter = 0  # Reset error counter
