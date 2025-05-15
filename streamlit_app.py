@@ -1,122 +1,91 @@
 import streamlit as st
 import requests
 import pandas as pd
-import numpy as np
 import matplotlib.pyplot as plt
-import talib
 from datetime import datetime
 
-# API Configuration
+# Configuration
 COINGECKO_API = "https://api.coingecko.com/api/v3"
 SYMBOL = "bitcoin"
 CURRENCY = "usd"
-DAYS = 365  # 1 year of historical data
+DAYS = 90  # 3 months historical data
 
-def fetch_coingecko_data():
+@st.cache_resource(show_spinner=False)
+def fetch_data():
     """Fetch cryptocurrency data from CoinGecko API"""
     try:
         url = f"{COINGECKO_API}/coins/{SYMBOL}/market_chart?vs_currency={CURRENCY}&days={DAYS}"
-        response = requests.get(url, timeout=15)
+        response = requests.get(url, timeout=10)
         response.raise_for_status()
-        return response.json()
+        return response.json().get('prices', [])
     except Exception as e:
         st.error(f"API Error: {str(e)}")
         return None
 
-def calculate_technical_indicators(df):
-    """Calculate technical indicators using TA-Lib"""
-    closes = df['price'].values
-    
-    # Moving Averages
-    df['SMA_20'] = talib.SMA(closes, timeperiod=20)
-    df['EMA_50'] = talib.EMA(closes, timeperiod=50)
-    
-    # Oscillators
-    df['RSI_14'] = talib.RSI(closes, timeperiod=14)
-    
-    # MACD
-    macd, signal, _ = talib.MACD(closes, 
-                                fastperiod=12, 
-                                slowperiod=26, 
-                                signalperiod=9)
-    df['MACD'] = macd
-    df['Signal'] = signal
-    
-    # Bollinger Bands
-    upper, middle, lower = talib.BBANDS(closes, 
-                                       timeperiod=20, 
-                                       nbdevup=2, 
-                                       nbdevdn=2)
-    df['BB_Upper'] = upper
-    df['BB_Middle'] = middle
-    df['BB_Lower'] = lower
-    
-    return df.dropna()
-
-# Streamlit Interface Configuration
-st.set_page_config(page_title="Crypto Technical Analysis Dashboard", layout="wide")
-st.title("📈 Advanced Cryptocurrency Analysis")
-st.markdown("""
-**Data Source:** CoinGecko API | **Technical Indicators:** SMA, EMA, RSI, MACD, Bollinger Bands
-""")
-
-# Data Processing
-raw_data = fetch_coingecko_data()
-
-if raw_data:
-    prices = raw_data.get('prices', [])
+def calculate_indicators(prices):
+    """Calculate technical indicators using pure Python"""
     df = pd.DataFrame(prices, columns=['timestamp', 'price'])
     df['date'] = pd.to_datetime(df['timestamp'], unit='ms')
     df.set_index('date', inplace=True)
-    df = calculate_technical_indicators(df)
     
-    # Latest Values
-    latest = df.iloc[-1]
+    # Simple Moving Average (20 period)
+    df['SMA_20'] = df['price'].rolling(window=20).mean()
     
-    # Key Metrics Display
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Current Price", f"${latest['price']:,.2f}")
-    with col2:
-        st.metric("RSI (14)", f"{latest['RSI_14']:.1f}")
-    with col3:
-        st.metric("MACD", f"{latest['MACD']:.2f}")
-    with col4:
-        st.metric("EMA 50", f"${latest['EMA_50']:,.2f}")
+    # Exponential Moving Average (50 period)
+    df['EMA_50'] = df['price'].ewm(span=50, adjust=False).mean()
     
-    # Price and Bollinger Bands Chart
-    st.subheader("Price Action with Bollinger Bands")
-    fig1, ax1 = plt.subplots(figsize=(14, 5))
-    ax1.plot(df.index, df['price'], label='Price', color='#1f77b4')
-    ax1.plot(df.index, df['BB_Upper'], linestyle='--', color='#ff7f0e', label='Upper Band')
-    ax1.plot(df.index, df['BB_Lower'], linestyle='--', color='#ff7f0e', label='Lower Band')
-    ax1.fill_between(df.index, df['BB_Upper'], df['BB_Lower'], alpha=0.1, color='orange')
-    ax1.set_title("Price with Bollinger Bands")
-    ax1.set_xlabel("Date")
-    ax1.set_ylabel("Price (USD)")
-    ax1.legend()
-    st.pyplot(fig1)
+    # Relative Strength Index (14 period)
+    delta = df['price'].diff()
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+    avg_gain = gain.rolling(14).mean()
+    avg_loss = loss.rolling(14).mean()
+    rs = avg_gain / avg_loss
+    df['RSI_14'] = 100 - (100 / (1 + rs))
     
-    # MACD and RSI Chart
-    st.subheader("Momentum Indicators")
-    fig2, (ax2, ax3) = plt.subplots(2, 1, figsize=(14, 8), sharex=True)
-    
-    ax2.plot(df.index, df['MACD'], label='MACD', color='green')
-    ax2.plot(df.index, df['Signal'], label='Signal Line', color='red')
-    ax2.set_title("MACD (12,26,9)")
-    ax2.legend()
-    
-    ax3.plot(df.index, df['RSI_14'], label='RSI 14', color='purple')
-    ax3.axhline(30, linestyle='--', color='gray', alpha=0.5)
-    ax3.axhline(70, linestyle='--', color='gray', alpha=0.5)
-    ax3.set_title("Relative Strength Index (RSI)")
-    ax3.legend()
-    
-    plt.tight_layout()
-    st.pyplot(fig2)
-    
-else:
-    st.warning("Failed to retrieve data. Please check your internet connection or try again later.")
+    return df.dropna()
 
-# Footer
-st.caption(f"Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | Made with Streamlit")
+# Streamlit UI Configuration
+st.set_page_config(
+    page_title="Crypto Analytics Pro",
+    page_icon="📈",
+    layout="centered"
+)
+
+def main():
+    st.title("💰 Crypto Analysis Dashboard")
+    st.markdown("Real-time cryptocurrency market analysis")
+    
+    with st.spinner("Loading market data..."):
+        prices = fetch_data()
+    
+    if prices:
+        df = calculate_indicators(prices)
+        
+        if not df.empty:
+            # Display Key Metrics
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Current Price", f"${df['price'].iloc[-1]:,.2f}")
+            with col2:
+                st.metric("RSI (14)", f"{df['RSI_14'].iloc[-1]:.1f}")
+            with col3:
+                st.metric("EMA (50)", f"${df['EMA_50'].iloc[-1]:,.2f}")
+            
+            # Price Chart
+            st.subheader("Price Analysis")
+            fig, ax = plt.subplots(figsize=(12, 6))
+            ax.plot(df.index, df['price'], label='Price', color='#4CAF50')
+            ax.plot(df.index, df['SMA_20'], label='SMA 20', linestyle='--', color='#FF5722')
+            ax.set_title("Price Movement with Technical Indicators")
+            ax.legend()
+            st.pyplot(fig)
+        else:
+            st.warning("Insufficient data for analysis")
+    else:
+        st.error("Failed to retrieve market data")
+        
+    st.caption(f"Last update: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+if __name__ == "__main__":
+    main()
