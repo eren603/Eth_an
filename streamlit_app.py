@@ -2,132 +2,120 @@ import streamlit as st
 import requests
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
 from datetime import datetime
 import time
+import plotly.graph_objects as go
 
 # Configuration
 COINGECKO_API = "https://api.coingecko.com/api/v3"
 SYMBOL = "bitcoin"
 CURRENCY = "usd"
-REFRESH_INTERVAL = 30  # Seconds
-WINDOW_SIZES = [5, 10, 14, 20, 26, 50, 100, 200]  # Multiple timeframes
+REFRESH_INTERVAL = 45  # Optimal refresh rate in seconds
+CACHE_TIMEOUT = 1800    # 30-minute caching
 
-def fetch_real_time_data():
-    """Fetch comprehensive market data from CoinGecko API"""
+# Streamlit configuration
+st.set_page_config(
+    page_title="Professional Crypto Dashboard",
+    layout="wide",
+    page_icon="₿",
+    initial_sidebar_state="collapsed"
+)
+
+@st.cache_resource(ttl=CACHE_TIMEOUT, show_spinner=False)
+def fetch_market_data():
+    """Fetch optimized market data with enhanced caching"""
     try:
-        # Real-time data with multiple metrics
-        url = f"{COINGECKO_API}/coins/{SYMBOL}/market_chart?vs_currency={CURRENCY}&days=14&interval=hourly"
+        url = f"{COINGECKO_API}/coins/{SYMBOL}/market_chart?vs_currency={CURRENCY}&days=14"
         response = requests.get(url, timeout=15)
         response.raise_for_status()
-        data = response.json()
-        
-        return {
-            'prices': data.get('prices', []),
-            'volumes': data.get('total_volumes', [])
-        }
+        return response.json()
     except Exception as e:
         st.error(f"Data fetch error: {str(e)}")
         return None
 
-def calculate_indicators(df):
-    """Calculate 26+ technical indicators using pure pandas"""
-    # Price transformations
-    df['Typical_Price'] = (df['high'] + df['low'] + df['close']) / 3
-    df['Weighted_Close'] = (df['close'] * 2 + df['high'] + df['low']) / 4
+def create_interactive_chart(df):
+    """Create stable Plotly visualization"""
+    fig = go.Figure()
     
-    # Momentum Indicators
-    for period in [14, 20]:
-        df[f'RSI_{period}'] = 100 - (100 / (1 + (df['close'].diff().apply(lambda x: x if x > 0 else 0).rolling(period).mean() / 
-                                       df['close'].diff().apply(lambda x: -x if x < 0 else 0).rolling(period).mean()))
+    # Price trace
+    fig.add_trace(go.Scatter(
+        x=df.index,
+        y=df['prices'],
+        name='Price',
+        line=dict(color='#4CAF50', width=2)
+    ))
     
-    # Trend Indicators
-    for period in WINDOW_SIZES:
-        df[f'SMA_{period}'] = df['close'].rolling(period).mean()
-        df[f'EMA_{period}'] = df['close'].ewm(span=period).mean()
-        df[f'WMA_{period}'] = df['close'].rolling(period).apply(lambda x: np.dot(x, np.arange(1, period+1))/np.sum(np.arange(1, period+1))
+    # Technical indicators
+    fig.add_trace(go.Scatter(
+        x=df.index,
+        y=df['SMA_20'],
+        name='20 SMA',
+        line=dict(color='#FF5722', dash='dot')
+    ))
     
-    # Volatility Indicators
-    df['ATR'] = df['high'].combine(df['low'], np.maximum) - df['high'].combine(df['low'], np.minimum)
-    for period in [14, 20]:
-        df[f'Bollinger_Upper_{period}'] = df[f'SMA_{period}'] + (2 * df['close'].rolling(period).std())
-        df[f'Bollinger_Lower_{period}'] = df[f'SMA_{period}'] - (2 * df['close'].rolling(period).std())
+    fig.update_layout(
+        title='Real-Time Price Analysis',
+        xaxis_title='Time',
+        yaxis_title='Price (USD)',
+        template='plotly_dark',
+        hovermode="x unified",
+        margin=dict(l=20, r=20, t=50, b=20)
+    )
     
-    # Volume Indicators
-    df['OBV'] = (np.sign(df['close'].diff()) * df['volume']).cumsum()
-    df['VWAP'] = (df['volume'] * df['Typical_Price']).cumsum() / df['volume'].cumsum()
-    
-    # Cycle Indicators
-    df['HILO'] = (df['high'] + df['low']) / 2
-    df['CMF'] = (df['close'] - df['low']) / (df['high'] - df['low']) * df['volume']
-    
-    # Other Indicators
-    df['Momentum'] = df['close'].diff(4)
-    df['ROC'] = df['close'].pct_change(12)*100
-    df['Williams_%R'] = (df['high'].rolling(14).max() - df['close']) / (df['high'].rolling(14).max() - df['low'].rolling(14).min()) * -100
-    
-    return df.dropna()
+    return fig
 
-def create_dashboard():
-    """Professional trading dashboard layout"""
-    st.set_page_config(layout="wide", page_title="Pro Crypto Dashboard", page_icon="₿")
-    st.title("💰 Real-Time Cryptocurrency Analysis Dashboard")
+def main_dashboard():
+    """Main dashboard application logic"""
+    st.title("🚀 Professional Crypto Analytics Dashboard")
     
     placeholder = st.empty()
+    error_counter = 0
     
-    while True:
-        with placeholder.container():
-            data = fetch_real_time_data()
-            
-            if data and len(data['prices']) > 200:
-                df = pd.DataFrame(data['prices'], columns=['timestamp', 'close'])
-                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-                df.set_index('timestamp', inplace=True)
+    while error_counter < 3:
+        try:
+            with placeholder.container():
+                market_data = fetch_market_data()
                 
-                # Add OHLC data approximation
-                df['open'] = df['close'].shift()
-                df['high'] = df[['open', 'close']].max(axis=1)
-                df['low'] = df[['open', 'close']].min(axis=1)
-                df['volume'] = pd.DataFrame(data['volumes'], columns=['timestamp', 'volume'])['volume']
+                if market_data and 'prices' in market_data:
+                    df = pd.DataFrame(market_data['prices'], columns=['timestamp', 'prices'])
+                    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                    df.set_index('timestamp', inplace=True)
+                    
+                    # Technical calculations
+                    df['SMA_20'] = df['prices'].rolling(20).mean()
+                    df['RSI_14'] = 100 - (100 / (1 + (
+                        df['prices'].diff().clip(lower=0).rolling(14).mean() / 
+                        df['prices'].diff().clip(upper=0).abs().rolling(14).mean()
+                    ))
+                    
+                    # Real-time metrics
+                    current_price = df['prices'].iloc[-1]
+                    rsi_value = df['RSI_14'].iloc[-1]
+                    
+                    # Metric columns
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Current Price", f"${current_price:,.2f}")
+                    with col2:
+                        st.metric("RSI (14)", f"{rsi_value:.1f}", 
+                                "Overbought" if rsi_value > 70 else "Oversold" if rsi_value < 30 else "Neutral")
+                    with col3:
+                        st.metric("Last Update", datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+                    
+                    # Interactive visualization
+                    st.plotly_chart(create_interactive_chart(df), use_container_width=True)
+                    
+                    error_counter = 0  # Reset error counter
+                else:
+                    st.warning("Data unavailable. Please wait...")
+                    error_counter += 1
                 
-                df = calculate_indicators(df)
-                latest = df.iloc[-1]
-                
-                # Real-time metrics
-                cols = st.columns(4)
-                metrics = [
-                    ("Price", f"${latest['close']:,.2f}", "Current market price"),
-                    ("24h Change", f"{df['close'].pct_change(24).iloc[-1]*100:.2f}%", "24-hour percentage change"),
-                    ("RSI (14)", f"{latest['RSI_14']:.1f}", "Relative Strength Index"),
-                    ("VWAP", f"${latest['VWAP']:,.2f}", "Volume Weighted Average Price")
-                ]
-                
-                for col, (title, value, help_text) in zip(cols, metrics):
-                    with col:
-                        st.metric(title, value, help=help_text)
-                
-                # Interactive charts
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.subheader("Price & Moving Averages")
-                    st.line_chart(df[['close', 'SMA_50', 'EMA_20']].tail(100))
-                
-                with col2:
-                    st.subheader("Momentum Indicators")
-                    st.line_chart(df[['RSI_14', 'Williams_%R']].tail(100))
-                
-                # Data table
-                st.subheader("Technical Indicators")
-                st.dataframe(df.tail(10).style.format({
-                    'close': "${:,.2f}",
-                    'VWAP': "${:,.2f}",
-                    'RSI_14': "{:.1f}",
-                    'Bollinger_Upper_20': "${:,.2f}"
-                }))
-                
-                st.caption(f"Last update: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-                
-            time.sleep(REFRESH_INTERVAL)
+        except Exception as e:
+            error_counter += 1
+            st.error(f"System error: {str(e)}")
+            time.sleep(10)  # Error cooldown
+        
+        time.sleep(REFRESH_INTERVAL)
 
 if __name__ == "__main__":
-    create_dashboard()
+    main_dashboard()
