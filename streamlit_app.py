@@ -3,38 +3,44 @@ import requests
 import pandas as pd
 import matplotlib.pyplot as plt
 from datetime import datetime
+import time
 
 # Configuration
 COINGECKO_API = "https://api.coingecko.com/api/v3"
 SYMBOL = "bitcoin"
 CURRENCY = "usd"
-DAYS = 90  # 3 months historical data
+REFRESH_INTERVAL = 60  # seconds
 
-@st.cache_resource(show_spinner=False)
-def fetch_data():
-    """Fetch cryptocurrency data from CoinGecko API"""
+def fetch_real_time_data():
+    """Get real-time price and historical data"""
     try:
-        url = f"{COINGECKO_API}/coins/{SYMBOL}/market_chart?vs_currency={CURRENCY}&days={DAYS}"
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        return response.json().get('prices', [])
+        # Real-time price
+        price_url = f"{COINGECKO_API}/simple/price?ids={SYMBOL}&vs_currencies={CURRENCY}"
+        price_data = requests.get(price_url, timeout=5).json()
+        
+        # Historical data (last 24 hours)
+        history_url = f"{COINGECKO_API}/coins/{SYMBOL}/market_chart?vs_currency={CURRENCY}&days=1"
+        history_data = requests.get(history_url, timeout=10).json()
+        
+        return {
+            'current_price': price_data[SYMBOL][CURRENCY],
+            'history': history_data['prices']
+        }
     except Exception as e:
-        st.error(f"API Error: {str(e)}")
+        st.error(f"Data fetch error: {str(e)}")
         return None
 
 def calculate_indicators(prices):
-    """Calculate technical indicators using pure Python"""
+    """Calculate technical indicators in real-time"""
     df = pd.DataFrame(prices, columns=['timestamp', 'price'])
     df['date'] = pd.to_datetime(df['timestamp'], unit='ms')
     df.set_index('date', inplace=True)
     
-    # Simple Moving Average (20 period)
+    # Moving Averages
     df['SMA_20'] = df['price'].rolling(window=20).mean()
-    
-    # Exponential Moving Average (50 period)
     df['EMA_50'] = df['price'].ewm(span=50, adjust=False).mean()
     
-    # Relative Strength Index (14 period)
+    # RSI Calculation
     delta = df['price'].diff()
     gain = delta.where(delta > 0, 0)
     loss = -delta.where(delta < 0, 0)
@@ -45,47 +51,50 @@ def calculate_indicators(prices):
     
     return df.dropna()
 
-# Streamlit UI Configuration
+# Streamlit UI
 st.set_page_config(
-    page_title="Crypto Analytics Pro",
-    page_icon="📈",
-    layout="centered"
+    page_title="Real-Time Crypto Dashboard",
+    page_icon="🚀",
+    layout="wide"
 )
 
 def main():
-    st.title("💰 Crypto Analysis Dashboard")
-    st.markdown("Real-time cryptocurrency market analysis")
+    st.title("📊 Live Crypto Analysis Dashboard")
     
-    with st.spinner("Loading market data..."):
-        prices = fetch_data()
+    placeholder = st.empty()
     
-    if prices:
-        df = calculate_indicators(prices)
-        
-        if not df.empty:
-            # Display Key Metrics
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Current Price", f"${df['price'].iloc[-1]:,.2f}")
-            with col2:
-                st.metric("RSI (14)", f"{df['RSI_14'].iloc[-1]:.1f}")
-            with col3:
-                st.metric("EMA (50)", f"${df['EMA_50'].iloc[-1]:,.2f}")
+    while True:
+        with placeholder.container():
+            data = fetch_real_time_data()
             
-            # Price Chart
-            st.subheader("Price Analysis")
-            fig, ax = plt.subplots(figsize=(12, 6))
-            ax.plot(df.index, df['price'], label='Price', color='#4CAF50')
-            ax.plot(df.index, df['SMA_20'], label='SMA 20', linestyle='--', color='#FF5722')
-            ax.set_title("Price Movement with Technical Indicators")
-            ax.legend()
-            st.pyplot(fig)
-        else:
-            st.warning("Insufficient data for analysis")
-    else:
-        st.error("Failed to retrieve market data")
-        
-    st.caption(f"Last update: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            if data:
+                current_price = data['current_price']
+                history_df = calculate_indicators(data['history'])
+                
+                # Real-time Metrics
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Current Price", f"${current_price:,.2f}", delta=f"{((current_price/history_df['price'].iloc[0])-1)*100:.2f}%")
+                with col2:
+                    st.metric("RSI (14)", f"{history_df['RSI_14'].iloc[-1]:.1f}")
+                with col3:
+                    st.metric("EMA (50)", f"${history_df['EMA_50'].iloc[-1]:,.2f}")
+
+                # Live Price Chart
+                st.subheader("Live Price Movement")
+                fig, ax = plt.subplots(figsize=(14, 6))
+                ax.plot(history_df.index, history_df['price'], label='Price', color='#00FF00')
+                ax.plot(history_df.index, history_df['SMA_20'], label='SMA 20', linestyle='--', color='#FF0000')
+                ax.plot(history_df.index, history_df['EMA_50'], label='EMA 50', linestyle='-.', color='#0000FF')
+                ax.set_xlabel("Time", fontsize=12)
+                ax.set_ylabel("Price (USD)", fontsize=12)
+                ax.legend()
+                st.pyplot(fig)
+                
+                # Data Freshness Indicator
+                st.write(f"🔄 Last update: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            
+        time.sleep(REFRESH_INTERVAL)
 
 if __name__ == "__main__":
     main()
