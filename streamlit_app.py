@@ -1,88 +1,122 @@
 import streamlit as st
 import requests
 import pandas as pd
-import time
+import numpy as np
+import matplotlib.pyplot as plt
+import talib
+from datetime import datetime
 
-# Configuration Settings
-BASE_URL = "https://fapi.binance.com"
-SYMBOL = "BTCUSDT"
-INTERVALS = {
-    "5min": "5m",
-    "15min": "15m",
-    "1hour": "1h"
-}
+# API Configuration
+COINGECKO_API = "https://api.coingecko.com/api/v3"
+SYMBOL = "bitcoin"
+CURRENCY = "usd"
+DAYS = 365  # 1 year of historical data
 
-# Streamlit Interface
-st.set_page_config(page_title="Crypto Indicator Panel", layout="wide")
-st.title("📊 Real-Time Crypto Analysis")
-st.markdown("Market data powered by Binance Futures API")
-
-def fetch_data(symbol, interval, limit=200):
-    """Fetch data from Binance API"""
+def fetch_coingecko_data():
+    """Fetch cryptocurrency data from CoinGecko API"""
     try:
-        url = f"{BASE_URL}/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={limit}"
+        url = f"{COINGECKO_API}/coins/{SYMBOL}/market_chart?vs_currency={CURRENCY}&days={DAYS}"
         response = requests.get(url, timeout=15)
         response.raise_for_status()
-        
-        df = pd.DataFrame(response.json(), columns=[
-            'timestamp', 'open', 'high', 'low', 'close', 'volume',
-            'close_time', 'quote_volume', 'trades',
-            'taker_buy_base', 'taker_buy_quote', 'ignore'
-        ])
-        df['close'] = df['close'].astype(float)
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-        return df.set_index('timestamp')
+        return response.json()
     except Exception as e:
-        st.error(f"🔴 Data fetch error: {str(e)}")
-        return pd.DataFrame()
+        st.error(f"API Error: {str(e)}")
+        return None
 
-def calculate_indicators(df):
-    """Calculate technical indicators"""
-    # EMAs
-    df['EMA_9'] = df['close'].ewm(span=9).mean()
-    df['EMA_21'] = df['close'].ewm(span=21).mean()
+def calculate_technical_indicators(df):
+    """Calculate technical indicators using TA-Lib"""
+    closes = df['price'].values
     
-    # RSI
-    delta = df['close'].diff()
-    gain = delta.where(delta > 0, 0)
-    loss = -delta.where(delta < 0, 0)
-    avg_gain = gain.rolling(14).mean()
-    avg_loss = loss.rolling(14).mean()
-    rs = avg_gain / avg_loss
-    df['RSI'] = 100 - (100 / (1 + rs))
+    # Moving Averages
+    df['SMA_20'] = talib.SMA(closes, timeperiod=20)
+    df['EMA_50'] = talib.EMA(closes, timeperiod=50)
     
-    return df
+    # Oscillators
+    df['RSI_14'] = talib.RSI(closes, timeperiod=14)
+    
+    # MACD
+    macd, signal, _ = talib.MACD(closes, 
+                                fastperiod=12, 
+                                slowperiod=26, 
+                                signalperiod=9)
+    df['MACD'] = macd
+    df['Signal'] = signal
+    
+    # Bollinger Bands
+    upper, middle, lower = talib.BBANDS(closes, 
+                                       timeperiod=20, 
+                                       nbdevup=2, 
+                                       nbdevdn=2)
+    df['BB_Upper'] = upper
+    df['BB_Middle'] = middle
+    df['BB_Lower'] = lower
+    
+    return df.dropna()
 
-def main_panel():
-    """Main application interface"""
-    selected_interval = st.sidebar.selectbox("Time Interval", list(INTERVALS.keys()))
-    
-    try:
-        df = fetch_data(SYMBOL, INTERVALS[selected_interval])
-        if not df.empty:
-            df = calculate_indicators(df)
-            
-            # Price Chart
-            st.subheader(f"{SYMBOL} Price Action ({selected_interval})")
-            st.line_chart(df[['close', 'EMA_9', 'EMA_21']].tail(100))
-            
-            # Metrics
-            col1, col2 = st.columns(2)
-            with col1:
-                st.metric("Last Price", f"{df['close'].iloc[-1]:,.2f} $")
-                st.progress((df['RSI'].iloc[-1]/100))
-                st.caption(f"RSI: {df['RSI'].iloc[-1]:.1f}")
-                
-            with col2:
-                st.metric("24h Change", f"{(df['close'].iloc[-1]/df['close'].iloc[-24]-1)*100:.2f}%")
-                st.metric("Volume", f"{df['volume'].mean():,.0f} $")
-            
-            # Auto-refresh
-            time.sleep(60)
-            st.experimental_rerun()
-            
-    except Exception as e:
-        st.error(f"Analysis error: {str(e)}")
+# Streamlit Interface Configuration
+st.set_page_config(page_title="Crypto Technical Analysis Dashboard", layout="wide")
+st.title("📈 Advanced Cryptocurrency Analysis")
+st.markdown("""
+**Data Source:** CoinGecko API | **Technical Indicators:** SMA, EMA, RSI, MACD, Bollinger Bands
+""")
 
-if __name__ == "__main__":
-    main_panel()
+# Data Processing
+raw_data = fetch_coingecko_data()
+
+if raw_data:
+    prices = raw_data.get('prices', [])
+    df = pd.DataFrame(prices, columns=['timestamp', 'price'])
+    df['date'] = pd.to_datetime(df['timestamp'], unit='ms')
+    df.set_index('date', inplace=True)
+    df = calculate_technical_indicators(df)
+    
+    # Latest Values
+    latest = df.iloc[-1]
+    
+    # Key Metrics Display
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Current Price", f"${latest['price']:,.2f}")
+    with col2:
+        st.metric("RSI (14)", f"{latest['RSI_14']:.1f}")
+    with col3:
+        st.metric("MACD", f"{latest['MACD']:.2f}")
+    with col4:
+        st.metric("EMA 50", f"${latest['EMA_50']:,.2f}")
+    
+    # Price and Bollinger Bands Chart
+    st.subheader("Price Action with Bollinger Bands")
+    fig1, ax1 = plt.subplots(figsize=(14, 5))
+    ax1.plot(df.index, df['price'], label='Price', color='#1f77b4')
+    ax1.plot(df.index, df['BB_Upper'], linestyle='--', color='#ff7f0e', label='Upper Band')
+    ax1.plot(df.index, df['BB_Lower'], linestyle='--', color='#ff7f0e', label='Lower Band')
+    ax1.fill_between(df.index, df['BB_Upper'], df['BB_Lower'], alpha=0.1, color='orange')
+    ax1.set_title("Price with Bollinger Bands")
+    ax1.set_xlabel("Date")
+    ax1.set_ylabel("Price (USD)")
+    ax1.legend()
+    st.pyplot(fig1)
+    
+    # MACD and RSI Chart
+    st.subheader("Momentum Indicators")
+    fig2, (ax2, ax3) = plt.subplots(2, 1, figsize=(14, 8), sharex=True)
+    
+    ax2.plot(df.index, df['MACD'], label='MACD', color='green')
+    ax2.plot(df.index, df['Signal'], label='Signal Line', color='red')
+    ax2.set_title("MACD (12,26,9)")
+    ax2.legend()
+    
+    ax3.plot(df.index, df['RSI_14'], label='RSI 14', color='purple')
+    ax3.axhline(30, linestyle='--', color='gray', alpha=0.5)
+    ax3.axhline(70, linestyle='--', color='gray', alpha=0.5)
+    ax3.set_title("Relative Strength Index (RSI)")
+    ax3.legend()
+    
+    plt.tight_layout()
+    st.pyplot(fig2)
+    
+else:
+    st.warning("Failed to retrieve data. Please check your internet connection or try again later.")
+
+# Footer
+st.caption(f"Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | Made with Streamlit")
